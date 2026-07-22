@@ -1,6 +1,7 @@
 import torch
 
 from generative_models.datasets import get_mnist_dataloaders
+from generative_models.losses import VAELoss
 from generative_models.models import Decoder, Encoder, VAE
 
 
@@ -79,6 +80,54 @@ def test_vae_forward_is_differentiable():
     reconstruction, mu, logvar = vae(images)
 
     loss = reconstruction.sum() + mu.sum() + logvar.sum()
+    loss.backward()
+
+    assert vae.encoder.mu.weight.grad is not None
+    assert vae.decoder.output[0].weight.grad is not None
+
+
+def test_vae_loss_output_shapes():
+    train_loader, _ = get_mnist_dataloaders(batch_size=128, data_dir="data/raw")
+    images, _ = next(iter(train_loader))
+
+    vae = VAE(input_dim=784, hidden_dim=512, latent_dim=64, output_dim=784)
+    reconstruction, mu, logvar = vae(images)
+
+    criterion = VAELoss()
+    loss, recon_loss, kl_loss = criterion(reconstruction, images, mu, logvar)
+
+    assert loss.shape == torch.Size([])
+    assert recon_loss.shape == torch.Size([])
+    assert kl_loss.shape == torch.Size([])
+
+
+def test_vae_loss_is_finite_and_decomposable():
+    train_loader, _ = get_mnist_dataloaders(batch_size=128, data_dir="data/raw")
+    images, _ = next(iter(train_loader))
+
+    vae = VAE(input_dim=784, hidden_dim=512, latent_dim=64, output_dim=784)
+    reconstruction, mu, logvar = vae(images)
+
+    criterion = VAELoss()
+    loss, recon_loss, kl_loss = criterion(reconstruction, images, mu, logvar)
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(recon_loss)
+    assert torch.isfinite(kl_loss)
+    assert not torch.isnan(loss)
+    assert not torch.isinf(loss)
+    assert torch.allclose(loss, recon_loss + kl_loss)
+
+
+def test_vae_loss_is_differentiable():
+    train_loader, _ = get_mnist_dataloaders(batch_size=128, data_dir="data/raw")
+    images, _ = next(iter(train_loader))
+
+    vae = VAE(input_dim=784, hidden_dim=512, latent_dim=64, output_dim=784)
+    reconstruction, mu, logvar = vae(images)
+
+    criterion = VAELoss()
+    loss, _, _ = criterion(reconstruction, images, mu, logvar)
     loss.backward()
 
     assert vae.encoder.mu.weight.grad is not None
