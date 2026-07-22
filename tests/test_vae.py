@@ -1,7 +1,7 @@
 import torch
 
 from generative_models.datasets import get_mnist_dataloaders
-from generative_models.models import Decoder, Encoder
+from generative_models.models import Decoder, Encoder, VAE
 
 
 def test_encoder_output_shapes():
@@ -56,3 +56,30 @@ def test_decoder_output_in_valid_range():
 
     assert output.min() >= 0.0
     assert output.max() <= 1.0
+
+
+def test_vae_forward_pipeline():
+    train_loader, _ = get_mnist_dataloaders(batch_size=128, data_dir="data/raw")
+    images, _ = next(iter(train_loader))
+
+    vae = VAE(input_dim=784, hidden_dim=512, latent_dim=64, output_dim=784)
+    reconstruction, mu, logvar = vae(images)
+
+    assert images.shape == (128, 1, 28, 28)
+    assert reconstruction.shape == (128, 1, 28, 28)
+    assert mu.shape == (128, 64)
+    assert logvar.shape == (128, 64)
+
+
+def test_vae_forward_is_differentiable():
+    train_loader, _ = get_mnist_dataloaders(batch_size=128, data_dir="data/raw")
+    images, _ = next(iter(train_loader))
+
+    vae = VAE(input_dim=784, hidden_dim=512, latent_dim=64, output_dim=784)
+    reconstruction, mu, logvar = vae(images)
+
+    loss = reconstruction.sum() + mu.sum() + logvar.sum()
+    loss.backward()
+
+    assert vae.encoder.mu.weight.grad is not None
+    assert vae.decoder.output[0].weight.grad is not None

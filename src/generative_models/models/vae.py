@@ -55,3 +55,26 @@ class Decoder(nn.Module):
         x = self.backbone(z)
         x = self.output(x)
         return x.view(x.size(0), *self.image_shape)
+
+
+class VAE(nn.Module):
+    """Variational autoencoder composing encoder and decoder."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        latent_dim: int,
+        output_dim: int,
+    ) -> None:
+        super().__init__()
+        self.encoder = Encoder(input_dim, hidden_dim, latent_dim)
+        self.decoder = Decoder(latent_dim, hidden_dim, output_dim)
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mu, logvar = self.encoder(x)
+        z = self.encoder.reparameterize(mu, logvar)
+        reconstruction = self.decoder(z)
+        return reconstruction, mu, logvar
