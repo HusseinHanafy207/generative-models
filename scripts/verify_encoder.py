@@ -15,6 +15,9 @@ def main() -> None:
     print(mu.shape)
     print(logvar.shape)
 
+    z = encoder.reparameterize(mu, logvar)
+    print(z.shape)
+
 
 if __name__ == "__main__":
     main()

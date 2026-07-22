@@ -24,3 +24,8 @@ class Encoder(nn.Module):
         mu = self.mu(features)
         logvar = self.logvar(features)
         return mu, logvar
+
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + std * eps
