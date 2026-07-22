@@ -1,0 +1,24 @@
+# Dataset
+dataset: MNIST
+data_dir: data/raw
+
+# Training
+batch_size: 128
+epochs: 50
+learning_rate: 0.001
+optimizer: Adam
+
+# Model
+latent_dim: 64
+hidden_dim: 512
+
+# Device
+device: auto
+
+# Saving
+checkpoint_dir: outputs/vae/checkpoints
+sample_dir: outputs/vae/samples
+log_dir: outputs/vae/logs
+
+# Randomness
+seed: 42
