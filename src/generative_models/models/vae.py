@@ -29,3 +29,29 @@ class Encoder(nn.Module):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + std * eps
+
+
+class Decoder(nn.Module):
+    """Maps latent vectors to reconstructed images via p(x|z)."""
+
+    def __init__(self, latent_dim: int, hidden_dim: int, output_dim: int) -> None:
+        super().__init__()
+        feature_dim = hidden_dim // 2
+        side = int(output_dim**0.5)
+        self.image_shape = (1, side, side)
+
+        self.backbone = nn.Sequential(
+            nn.Linear(latent_dim, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.output = nn.Sequential(
+            nn.Linear(hidden_dim, output_dim),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        x = self.backbone(z)
+        x = self.output(x)
+        return x.view(x.size(0), *self.image_shape)

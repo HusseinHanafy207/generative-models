@@ -1,5 +1,7 @@
+import torch
+
 from generative_models.datasets import get_mnist_dataloaders
-from generative_models.models import Encoder
+from generative_models.models import Decoder, Encoder
 
 
 def test_encoder_output_shapes():
@@ -35,3 +37,22 @@ def test_encoder_reparameterize_is_differentiable():
     assert z.requires_grad
     z.sum().backward()
     assert encoder.mu.weight.grad is not None
+
+
+def test_decoder_output_shape():
+    decoder = Decoder(latent_dim=64, hidden_dim=512, output_dim=784)
+    z = torch.randn(128, 64)
+
+    output = decoder(z)
+
+    assert output.shape == (128, 1, 28, 28)
+
+
+def test_decoder_output_in_valid_range():
+    decoder = Decoder(latent_dim=64, hidden_dim=512, output_dim=784)
+    z = torch.randn(128, 64)
+
+    output = decoder(z)
+
+    assert output.min() >= 0.0
+    assert output.max() <= 1.0
