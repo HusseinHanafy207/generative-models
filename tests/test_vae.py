@@ -117,6 +117,21 @@ def test_vae_loss_is_finite_and_decomposable():
     assert not torch.isnan(loss)
     assert not torch.isinf(loss)
     assert torch.allclose(loss, recon_loss + kl_loss)
+    assert kl_loss > 0.0
+
+
+def test_vae_loss_kl_is_comparable_to_reconstruction():
+    train_loader, _ = get_mnist_dataloaders(batch_size=128, data_dir="data/raw")
+    images, _ = next(iter(train_loader))
+
+    vae = VAE(input_dim=784, hidden_dim=512, latent_dim=64, output_dim=784)
+    reconstruction, mu, logvar = vae(images)
+
+    criterion = VAELoss()
+    _, recon_loss, kl_loss = criterion(reconstruction, images, mu, logvar)
+
+    ratio = kl_loss.item() / recon_loss.item()
+    assert ratio > 1e-4
 
 
 def test_vae_loss_is_differentiable():

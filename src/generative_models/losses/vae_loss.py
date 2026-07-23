@@ -4,11 +4,11 @@ import torch.nn.functional as F
 
 
 class VAELoss(nn.Module):
-    """VAE loss: reconstruction (BCE) + KL divergence."""
+    """VAE loss: reconstruction (BCE) + KL divergence.
 
-    def __init__(self, reduction: str = "mean") -> None:
-        super().__init__()
-        self.reduction = reduction
+    Uses sum reduction for both terms so reconstruction and KL stay on
+    comparable scales during training (Pattern A from the VAE literature).
+    """
 
     def forward(
         self,
@@ -20,14 +20,12 @@ class VAELoss(nn.Module):
         reconstruction_loss = F.binary_cross_entropy(
             reconstruction,
             images,
-            reduction=self.reduction,
+            reduction="sum",
         )
 
-        kl_per_sample = -0.5 * torch.sum(
+        kl_loss = -0.5 * torch.sum(
             1 + logvar - mu.pow(2) - logvar.exp(),
-            dim=1,
         )
-        kl_loss = torch.mean(kl_per_sample)
 
         total_loss = reconstruction_loss + kl_loss
         return total_loss, reconstruction_loss, kl_loss

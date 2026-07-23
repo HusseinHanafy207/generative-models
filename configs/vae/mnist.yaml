@@ -19,6 +19,7 @@ device: auto
 checkpoint_dir: outputs/vae/checkpoints
 sample_dir: outputs/vae/samples
 log_dir: outputs/vae/logs
+reconstruct_every: 5
 
 # Randomness
 seed: 42
