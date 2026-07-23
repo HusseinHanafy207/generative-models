@@ -1,8 +1,17 @@
-"""Mathematical and shape tests for the DDPM noise scheduler."""
+"""Mathematical and shape tests for DDPM scheduler and forward diffusion."""
+
+from pathlib import Path
 
 import torch
 
-from generative_models.ddpm import NoiseScheduler
+from generative_models.datasets import get_mnist_dataloaders
+from generative_models.ddpm import (
+    NoiseScheduler,
+    forward_diffuse,
+    forward_diffuse_trajectory,
+    sample_timesteps,
+    save_forward_diffusion_grid,
+)
 
 
 def test_linear_beta_schedule_bounds_and_shape():
@@ -152,3 +161,90 @@ def test_unsupported_schedule_raises():
     except ValueError:
         raised = True
     assert raised
+
+
+# --- Stage 2: forward diffusion ---
+
+
+def test_sample_timesteps_range_and_shape():
+    t = sample_timesteps(batch_size=32, num_timesteps=1000)
+
+    assert t.shape == (32,)
+    assert t.dtype == torch.int64
+    assert int(t.min()) >= 0
+    assert int(t.max()) < 1000
+
+
+def test_forward_diffuse_returns_xt_t_and_noise():
+    scheduler = NoiseScheduler(num_timesteps=1000)
+    train_loader, _ = get_mnist_dataloaders(batch_size=8, data_dir="data/raw")
+    x_0, _ = next(iter(train_loader))
+
+    x_t, t, noise = forward_diffuse(scheduler, x_0)
+
+    assert x_t.shape == x_0.shape
+    assert t.shape == (8,)
+    assert noise.shape == x_0.shape
+    assert int(t.min()) >= 0
+    assert int(t.max()) < 1000
+
+
+def test_forward_diffuse_respects_provided_t_and_noise():
+    scheduler = NoiseScheduler(num_timesteps=1000)
+    x_0 = torch.randn(4, 1, 28, 28)
+    t = torch.tensor([0, 10, 100, 999])
+    noise = torch.randn_like(x_0)
+
+    x_t, t_out, noise_out = forward_diffuse(scheduler, x_0, t=t, noise=noise)
+
+    assert torch.equal(t_out, t)
+    assert torch.equal(noise_out, noise)
+    expected = scheduler.q_sample(x_0, t, noise=noise)
+    assert torch.allclose(x_t, expected)
+
+
+def test_forward_diffuse_trajectory_shape_and_shared_noise():
+    scheduler = NoiseScheduler(num_timesteps=1000)
+    x_0 = torch.randn(3, 1, 28, 28)
+    timesteps = [0, 50, 100, 999]
+    noise = torch.randn_like(x_0)
+
+    progression, shared = forward_diffuse_trajectory(
+        scheduler, x_0, timesteps, noise=noise
+    )
+
+    assert progression.shape == (3, 4, 1, 28, 28)
+    assert torch.equal(shared, noise)
+    # Column 0 is nearly clean; last column matches nearly-pure noise
+    assert torch.mean((progression[:, 0] - x_0) ** 2).item() < 1e-3
+    assert torch.mean((progression[:, -1] - noise) ** 2).item() < 0.05
+
+
+def test_forward_diffuse_trajectory_mse_increases_with_t():
+    """With shared ε, mean squared error to x_0 should grow with t."""
+    scheduler = NoiseScheduler(num_timesteps=1000)
+    torch.manual_seed(0)
+    train_loader, _ = get_mnist_dataloaders(batch_size=16, data_dir="data/raw")
+    x_0, _ = next(iter(train_loader))
+    timesteps = [0, 50, 100, 200, 400, 600, 800, 999]
+
+    progression, _ = forward_diffuse_trajectory(scheduler, x_0, timesteps)
+
+    prev_mse = -1.0
+    for i in range(len(timesteps)):
+        mse = torch.mean((progression[:, i] - x_0) ** 2).item()
+        assert mse >= prev_mse - 1e-6
+        prev_mse = mse
+
+
+def test_save_forward_diffusion_grid(tmp_path: Path):
+    scheduler = NoiseScheduler(num_timesteps=1000)
+    x_0 = torch.rand(2, 1, 28, 28)
+    timesteps = [0, 100, 999]
+    progression, _ = forward_diffuse_trajectory(scheduler, x_0, timesteps)
+
+    output = tmp_path / "forward.png"
+    path = save_forward_diffusion_grid(progression, timesteps, output_path=output)
+
+    assert path.exists()
+    assert path.stat().st_size > 0
