@@ -4,6 +4,7 @@ Phased training (recommended):
   Phase 1 sanity check:  python scripts/train_vae.py --epochs 1
   Phase 2 short run:     python scripts/train_vae.py --epochs 10
   Phase 3 full run:      python scripts/train_vae.py --epochs 50
+  Resume to 100:         python scripts/train_vae.py --resume outputs/vae/checkpoints/checkpoint_epoch_050.pt --epochs 100
 """
 
 import argparse
@@ -36,7 +37,13 @@ def parse_args() -> argparse.Namespace:
         "--epochs",
         type=int,
         default=None,
-        help="Override number of training epochs.",
+        help="Total number of training epochs.",
+    )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Checkpoint path to resume training from.",
     )
     parser.add_argument(
         "--device",
@@ -66,7 +73,7 @@ def print_phase1_checks(train_metrics: dict[str, float], config: dict) -> None:
     checkpoint_path = Path(config["checkpoint_dir"]) / "latest.pt"
     print(f"[{'OK' if checkpoint_path.exists() else 'FAIL'}] Checkpoint saved")
 
-    train_csv = Path(config["log_dir"]) / "train_metrics.csv"
+    train_csv = Path(config["log_dir"]) / config.get("train_metrics_file", "train_metrics.csv")
     print(f"[{'OK' if train_csv.exists() else 'FAIL'}] Train metrics CSV written")
 
     sample_glob = list(Path(config["sample_dir"]).glob("reconstruction_epoch_*.png"))
@@ -85,7 +92,7 @@ def main() -> None:
     config.setdefault("train_metrics_file", "train_metrics_sum.csv")
     config.setdefault("val_metrics_file", "val_metrics_sum.csv")
 
-    if config.get("seed") is not None:
+    if args.resume is None and config.get("seed") is not None:
         torch.manual_seed(config["seed"])
 
     train_loader, test_loader = get_mnist_dataloaders(
@@ -110,6 +117,18 @@ def main() -> None:
         val_loader=test_loader,
         config=config,
     )
+
+    if args.resume:
+        checkpoint = trainer.load_checkpoint(args.resume)
+        config["start_epoch"] = checkpoint["epoch"]
+        if config["epochs"] <= checkpoint["epoch"]:
+            raise ValueError(
+                f"--epochs {config['epochs']} must be greater than resumed epoch "
+                f"{checkpoint['epoch']}."
+            )
+        config["checkpoint_alias"] = "vae_epoch100.pt" if config["epochs"] == 100 else None
+        print(f"Resumed from epoch {checkpoint['epoch']}, training to epoch {config['epochs']}")
+
     trainer.train()
 
     checkpoint = torch.load(
@@ -118,12 +137,12 @@ def main() -> None:
     )
     train_metrics = checkpoint["metrics"]
 
-    train_metrics_path = Path(config["log_dir"]) / "train_metrics.csv"
-    print(f"\nFinished training for {config['epochs']} epoch(s).")
-    print(f"Train metrics CSV: {train_metrics_path}")
+    metrics_file = Path(config["log_dir"]) / config["train_metrics_file"]
+    print(f"\nFinished training through epoch {config['epochs']}.")
+    print(f"Train metrics CSV: {metrics_file}")
     print(f"Latest checkpoint: {Path(config['checkpoint_dir']) / 'latest.pt'}")
 
-    if config["epochs"] == 1:
+    if config["epochs"] == 1 and args.resume is None:
         print_phase1_checks(train_metrics, config)
 
 

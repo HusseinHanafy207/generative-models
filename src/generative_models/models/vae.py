@@ -68,6 +68,7 @@ class VAE(nn.Module):
         output_dim: int,
     ) -> None:
         super().__init__()
+        self.latent_dim = latent_dim
         self.encoder = Encoder(input_dim, hidden_dim, latent_dim)
         self.decoder = Decoder(latent_dim, hidden_dim, output_dim)
 
@@ -78,3 +79,9 @@ class VAE(nn.Module):
         z = self.encoder.reparameterize(mu, logvar)
         reconstruction = self.decoder(z)
         return reconstruction, mu, logvar
+
+    def sample(self, num_samples: int, device: torch.device | None = None) -> torch.Tensor:
+        """Generate new images by sampling z ~ N(0, I) and decoding."""
+        device = device or next(self.parameters()).device
+        z = torch.randn(num_samples, self.latent_dim, device=device)
+        return self.decoder(z)

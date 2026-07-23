@@ -153,6 +153,16 @@ class VAETrainer:
         torch.save(checkpoint, epoch_path)
         torch.save(checkpoint, latest_path)
 
+        if alias := self.config.get("checkpoint_alias"):
+            torch.save(checkpoint, self.checkpoint_dir / alias)
+
+    def load_checkpoint(self, checkpoint_path: str | Path) -> dict[str, Any]:
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.current_epoch = checkpoint["epoch"]
+        return checkpoint
+
     def reconstruct_images(self, num_images: int = 8) -> Path:
         self.model.eval()
 
@@ -228,9 +238,10 @@ class VAETrainer:
         if seed := self.config.get("seed"):
             torch.manual_seed(seed)
 
+        start_epoch = self.config.get("start_epoch", 0)
         epochs = self.config["epochs"]
 
-        for epoch in range(1, epochs + 1):
+        for epoch in range(start_epoch + 1, epochs + 1):
             self.current_epoch = epoch
 
             train_metrics = self.train_epoch()
