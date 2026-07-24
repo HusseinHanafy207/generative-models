@@ -12,8 +12,13 @@ from generative_models.ddpm import (
     UNet,
     forward_diffuse,
     forward_diffuse_trajectory,
+    p_sample,
+    sample,
     sample_timesteps,
+    sample_trajectory,
+    save_denoising_gif,
     save_forward_diffusion_grid,
+    save_sample_grid,
     sinusoidal_time_embedding,
 )
 from generative_models.losses import DDPMLoss
@@ -545,4 +550,73 @@ def test_ddpm_loss_invalid_reduction_raises():
     except ValueError:
         raised = True
     assert raised
+
+
+# --- Stage 8: reverse sampling ---
+
+
+def _tiny_sampling_ddpm() -> DDPM:
+    return DDPM(
+        unet=UNet(
+            base_channels=16,
+            channel_mult=(1, 2),
+            num_res_blocks=1,
+            attention_resolutions=(),
+            dropout=0.0,
+        ),
+        num_timesteps=10,
+        beta_start=1e-4,
+        beta_end=0.02,
+    )
+
+
+def test_p_sample_step_shape():
+    scheduler = NoiseScheduler(num_timesteps=10)
+    x_t = torch.randn(2, 1, 28, 28)
+    t = torch.tensor([5, 5])
+    noise_pred = torch.randn_like(x_t)
+
+    x_prev = scheduler.p_sample_step(x_t, t, noise_pred)
+
+    assert x_prev.shape == x_t.shape
+
+
+def test_p_sample_t0_is_deterministic_mean():
+    """At t=0, reverse step should not add stochastic noise."""
+    scheduler = NoiseScheduler(num_timesteps=10)
+    x_t = torch.randn(2, 1, 28, 28)
+    t = torch.zeros(2, dtype=torch.long)
+    noise_pred = torch.randn_like(x_t)
+    z = torch.randn_like(x_t)
+
+    a = scheduler.p_sample_step(x_t, t, noise_pred, noise=z)
+    b = scheduler.p_sample_step(x_t, t, noise_pred, noise=torch.zeros_like(z))
+
+    assert torch.allclose(a, b)
+
+
+def test_sample_output_shape_and_range():
+    model = _tiny_sampling_ddpm()
+    images = sample(model, num_samples=4, show_progress=False)
+
+    assert images.shape == (4, 1, 28, 28)
+    assert float(images.min()) >= 0.0
+    assert float(images.max()) <= 1.0
+
+
+def test_sample_trajectory_includes_endpoints(tmp_path: Path):
+    model = _tiny_sampling_ddpm()
+    frames, timesteps = sample_trajectory(
+        model, num_samples=2, save_every=3, show_progress=False
+    )
+
+    assert frames.ndim == 5
+    assert frames.shape[1:] == (2, 1, 28, 28)
+    assert timesteps[0] == model.num_timesteps - 1
+    assert timesteps[-1] == 0
+
+    grid_path = save_sample_grid(frames[-1], tmp_path / "grid.png", nrow=2)
+    gif_path = save_denoising_gif(frames, tmp_path / "denoise.gif")
+    assert grid_path.exists()
+    assert gif_path.exists()
 

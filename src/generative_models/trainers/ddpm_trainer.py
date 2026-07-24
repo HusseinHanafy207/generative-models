@@ -148,11 +148,20 @@ class DDPMTrainer:
             "config": self.config,
         }
 
-        epoch_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pt"
         latest_path = self.checkpoint_dir / "latest.pt"
-
-        torch.save(checkpoint, epoch_path)
         torch.save(checkpoint, latest_path)
+
+        # Keep periodic snapshots for resume + sample-quality comparisons.
+        checkpoint_every = int(self.config.get("checkpoint_every", 5))
+        total_epochs = int(self.config["epochs"])
+        should_snapshot = (
+            epoch == 1
+            or epoch == total_epochs
+            or (checkpoint_every > 0 and epoch % checkpoint_every == 0)
+        )
+        if should_snapshot:
+            epoch_path = self.checkpoint_dir / f"epoch_{epoch:03d}.pt"
+            torch.save(checkpoint, epoch_path)
 
         if alias := self.config.get("checkpoint_alias"):
             torch.save(checkpoint, self.checkpoint_dir / alias)

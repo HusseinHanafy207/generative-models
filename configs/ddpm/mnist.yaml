@@ -29,6 +29,8 @@ sample_dir: outputs/ddpm/samples
 log_dir: outputs/ddpm/logs
 train_metrics_file: train_metrics.csv
 val_metrics_file: val_metrics.csv
+# Keep latest.pt every epoch; also write epoch_005.pt, epoch_010.pt, ...
+checkpoint_every: 5
 
 # Randomness
 seed: 42

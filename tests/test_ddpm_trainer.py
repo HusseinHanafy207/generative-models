@@ -80,6 +80,7 @@ def test_ddpm_trainer_runs_one_epoch(tmp_path: Path):
     assert train_metrics_path.exists()
     assert val_metrics_path.exists()
     assert checkpoint_path.exists()
+    assert (tmp_path / "checkpoints" / "epoch_001.pt").exists()
 
     with train_metrics_path.open("r", encoding="utf-8") as file:
         train_rows = list(csv.DictReader(file))

@@ -19,6 +19,7 @@ from generative_models.datasets import get_mnist_dataloaders
 from generative_models.ddpm import DDPM
 from generative_models.losses import DDPMLoss
 from generative_models.trainers import DDPMTrainer
+from generative_models.ddpm.checkpointing import build_ddpm_from_config
 
 
 def load_config(config_path: Path) -> dict:
@@ -27,18 +28,7 @@ def load_config(config_path: Path) -> dict:
 
 
 def build_ddpm(config: dict) -> DDPM:
-    return DDPM(
-        num_timesteps=config["num_timesteps"],
-        beta_start=config["beta_start"],
-        beta_end=config["beta_end"],
-        in_channels=1,
-        out_channels=1,
-        base_channels=config["base_channels"],
-        channel_mult=tuple(config["channel_mult"]),
-        num_res_blocks=config["num_res_blocks"],
-        attention_resolutions=tuple(config["attention_resolutions"]),
-        dropout=config.get("dropout", 0.1),
-    )
+    return build_ddpm_from_config(config)
 
 
 def parse_args() -> argparse.Namespace:

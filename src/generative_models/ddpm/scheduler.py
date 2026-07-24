@@ -61,6 +61,16 @@ class NoiseScheduler:
         self.sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
         self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
 
+        # Reverse-process helpers (Ho et al., 2020)
+        # ᾱ_{t-1} with ᾱ_{-1} := 1
+        alphas_cumprod_prev = torch.cat(
+            [torch.ones(1, dtype=torch.float64), alphas_cumprod[:-1]]
+        )
+        self.alphas_cumprod_prev = alphas_cumprod_prev
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+        # Fixed variance choice σ_t² = β_t (paper §3.2); β̃_t is similar.
+        self.posterior_variance = betas
+
     def _extract(self, coeffs: torch.Tensor, t: torch.Tensor, x_shape: tuple[int, ...]) -> torch.Tensor:
         """Gather schedule coefficients at timesteps ``t`` and reshape for broadcast."""
         if t.ndim != 1:
@@ -109,3 +119,50 @@ class NoiseScheduler:
             self.sqrt_one_minus_alphas_cumprod, t, x_0.shape
         )
         return sqrt_alpha_bar * x_0 + sqrt_one_minus_alpha_bar * noise
+
+    def p_sample_step(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        noise_pred: torch.Tensor,
+        noise: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """One reverse step: predict ``x_{t-1}`` from ``x_t`` and ε̂.
+
+        Paper Eq. 11 (noise-prediction parameterization):
+
+            x_{t-1} = (1/√α_t) (x_t - (β_t / √(1-ᾱ_t)) ε̂) + σ_t z
+
+        with ``σ_t² = β_t`` and ``z = 0`` when ``t = 0``.
+        """
+        if noise_pred.shape != x_t.shape:
+            raise ValueError(
+                f"noise_pred shape {tuple(noise_pred.shape)} must match "
+                f"x_t shape {tuple(x_t.shape)}"
+            )
+        if t.shape[0] != x_t.shape[0]:
+            raise ValueError(
+                f"Batch size mismatch: x_t has batch {x_t.shape[0]}, t has {t.shape[0]}"
+            )
+
+        beta_t = self._extract(self.betas, t, x_t.shape)
+        sqrt_one_minus_alpha_bar = self._extract(
+            self.sqrt_one_minus_alphas_cumprod, t, x_t.shape
+        )
+        sqrt_recip_alpha = self._extract(self.sqrt_recip_alphas, t, x_t.shape)
+
+        model_mean = sqrt_recip_alpha * (
+            x_t - beta_t * noise_pred / sqrt_one_minus_alpha_bar
+        )
+
+        # No noise at the final step (t = 0)
+        nonzero_mask = (t != 0).float().view(-1, *([1] * (x_t.ndim - 1)))
+        if noise is None:
+            noise = torch.randn_like(x_t)
+        elif noise.shape != x_t.shape:
+            raise ValueError(
+                f"noise shape {tuple(noise.shape)} must match x_t shape {tuple(x_t.shape)}"
+            )
+
+        sigma_t = torch.sqrt(self._extract(self.posterior_variance, t, x_t.shape))
+        return model_mean + nonzero_mask * sigma_t * noise
