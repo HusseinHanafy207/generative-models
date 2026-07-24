@@ -2,7 +2,24 @@
 
 PyTorch implementations of generative models from scratch.
 
-This repository currently includes a complete **MLP Variational Autoencoder (VAE)** on MNIST — from dataset pipeline and model components through training, logging, checkpointing, and evaluation experiments. A DDPM implementation is planned next, reusing the same engineering patterns.
+| Model | Dataset | Status |
+|-------|---------|--------|
+| **VAE** (MLP) | MNIST | Complete — train, sample, interpolate, latent viz |
+| **DDPM** (U-Net) | MNIST | Complete — train, reverse sample, epoch progression |
+
+Shared engineering: YAML configs, modular losses/trainers, CSV logs, checkpoint resume, and evaluation scripts.
+
+---
+
+## Table of contents
+
+1. [VAE results](#vae-results-mnist-100-epochs)
+2. [DDPM results](#ddpm-results-mnist-50-epochs)
+3. [Architecture](#architecture)
+4. [Quick start](#quick-start)
+5. [Project structure](#project-structure)
+6. [Engineering patterns](#engineering-patterns)
+7. [Roadmap](#roadmap)
 
 ---
 
@@ -19,41 +36,80 @@ This repository currently includes a complete **MLP Variational Autoencoder (VAE
 
 ### Training curves
 
-![Training curves](docs/assets/vae/training_curves.png)
-
-Metrics are logged to CSV after every epoch (`outputs/vae/logs/train_metrics_sum.csv`).
+![VAE training curves](docs/assets/vae/training_curves.png)
 
 ### Test-set reconstructions
 
 Encoder → reparameterization → decoder on held-out digits:
 
-![Test reconstructions](docs/assets/vae/test_reconstructions.png)
+![VAE test reconstructions](docs/assets/vae/test_reconstructions.png)
 
 ### Random samples
 
-New digits generated from the prior `z ~ N(0, I)` — no input image required:
+New digits from the prior \(z \sim \mathcal{N}(0, I)\):
 
-![Random samples](docs/assets/vae/random_samples.png)
+![VAE random samples](docs/assets/vae/random_samples.png)
 
 ### Latent interpolation
 
 Linear interpolation between latent means of digits **3** and **8**:
 
-![Latent interpolation](docs/assets/vae/latent_interpolation_3_to_8.png)
+![VAE latent interpolation](docs/assets/vae/latent_interpolation_3_to_8.png)
 
 ### Latent space (t-SNE)
 
-2D projection of encoder means `μ` for 3,000 test images — digits form meaningful clusters:
+2D projection of encoder means \(\mu\) for 3,000 test images:
 
-![Latent space t-SNE](docs/assets/vae/latent_space_tsne.png)
+![VAE latent space t-SNE](docs/assets/vae/latent_space_tsne.png)
 
-See also [PCA plot](docs/assets/vae/latent_space_pca.png) and [50 vs 100 epoch comparison](docs/assets/vae/epoch_comparison.md).
+See also [PCA](docs/assets/vae/latent_space_pca.png) and the [50 vs 100 epoch comparison](docs/assets/vae/epoch_comparison.md).
+
+<details>
+<summary><strong>Research note: posterior collapse fix</strong></summary>
+
+Early training used `BCE(reduction="mean")` with `KL = mean(sum(...))`, which made the KL term ~100,000× smaller than expected. The encoder collapsed to \(\mu \approx 0\), \(\sigma \approx 1\) and the decoder ignored the latent code.
+
+**Fix:** switch both terms to **sum reduction**. KL became ~1,000–2,500, reconstructions improved immediately, and random samples became diverse recognizable digits.
+
+</details>
+
+---
+
+## DDPM results (MNIST, 50 epochs)
+
+| Setting | Value |
+|---------|-------|
+| Architecture | Time-conditioned U-Net (~16.2M params) |
+| Timesteps \(T\) | 1000 |
+| \(\beta\) schedule | Linear \(10^{-4}\) → \(0.02\) |
+| Loss | Noise-prediction MSE (\(L_{\text{simple}}\)) |
+| Optimizer | Adam, lr = \(2 \times 10^{-4}\) |
+| Batch size | 64 |
+| Image range | \([0, 1]\) |
+
+### Training curves
+
+![DDPM training curves](docs/assets/ddpm/training_curves.png)
+
+Train/val noise-prediction MSE drops quickly in the first ~10 epochs, then improves slowly through epoch 50.
+
+### Sample quality over training
+
+Digits emerge early; later epochs mainly clean strokes and reduce malformed hybrids.
+
+| Epoch 1 | Epoch 10 |
+|---------|----------|
+| ![DDPM epoch 1](docs/assets/ddpm/samples_epoch_001.png) | ![DDPM epoch 10](docs/assets/ddpm/samples_epoch_010.png) |
+
+| Epoch 20 | Epoch 50 |
+|----------|----------|
+| ![DDPM epoch 20](docs/assets/ddpm/samples_epoch_020.png) | ![DDPM epoch 50](docs/assets/ddpm/samples_epoch_050.png) |
 
 ---
 
 ## Architecture
 
-### VAE forward pass
+### VAE
 
 ```mermaid
 flowchart LR
@@ -67,26 +123,30 @@ flowchart LR
     dec --> xhat["Reconstruction x̂"]
 ```
 
-### Encoder (modular)
-
 ```
-784 → 512 → 256 → μ (64)
-                  → log σ² (64)
-```
-
-### Decoder (symmetric)
-
-```
-64 → 256 → 512 → 784 → Sigmoid → (1×28×28)
+Encoder:  784 → 512 → 256 → μ (64), log σ² (64)
+Decoder:  64 → 256 → 512 → 784 → Sigmoid → (1×28×28)
+Loss:     L = BCE_sum(x̂, x) + KL_sum(q(z|x) ‖ N(0, I))
 ```
 
-### Loss (ELBO)
+### DDPM
+
+```mermaid
+flowchart LR
+    x0["Clean x₀"] --> fwd["Forward q(x_t \| x₀)\nx_t = √ᾱ_t x₀ + √(1-ᾱ_t) ε"]
+    fwd --> xt["Noisy x_t"]
+    t["Timestep t"] --> unet["U-Net ε_θ(x_t, t)"]
+    xt --> unet
+    unet --> ehat["Predicted ε̂"]
+    ehat --> loss["MSE(ε̂, ε)"]
+```
 
 ```
-L = reconstruction_loss + kl_loss
+Schedule:  β_t linear in [1e-4, 0.02],  α_t = 1−β_t,  ᾱ_t = ∏ α_s
+U-Net:     28→14→7 (base 64, mult 1/2/4), attention at 7×7, sinusoidal time emb
+Train:     sample t, ε; predict ε̂; minimize ‖ε̂ − ε‖²
+Sample:    x_T ~ N(0,I) → iterative reverse steps → x_0
 ```
-
-Both terms use **sum reduction** so reconstruction and KL stay on comparable scales during training.
 
 ---
 
@@ -103,40 +163,42 @@ pip install -r requirements.txt
 pip install -e ".[dev]"
 ```
 
-### Train
+### VAE
 
 ```bash
-# Sanity check (1 epoch)
+# Train
 python scripts/train_vae.py --epochs 1
-
-# Full training (50 epochs)
 python scripts/train_vae.py --epochs 50
-
-# Resume to 100 epochs
 python scripts/train_vae.py --resume outputs/vae/checkpoints/checkpoint_epoch_050.pt --epochs 100
-```
 
-### Experiments
-
-```bash
-# Random sampling
+# Experiments
 python scripts/sample_vae.py --checkpoint outputs/vae/checkpoints/vae_epoch100.pt --seed 42
-
-# Test-set reconstruction grid
 python scripts/reconstruct_vae.py
-
-# Latent interpolation (3 → 8)
 python scripts/interpolate_vae.py --digit-a 3 --digit-b 8
-
-# Latent space visualization (PCA + t-SNE)
 python scripts/visualize_latent_vae.py --max-samples 3000
-
-# Training curves
 python scripts/plot_training_curves.py
-
-# Copy figures into docs/assets/vae/ for the README
 python scripts/export_readme_assets.py
 ```
+
+### DDPM
+
+```bash
+# Train
+python scripts/train_ddpm.py --epochs 1
+python scripts/train_ddpm.py --epochs 50
+python scripts/train_ddpm.py --resume outputs/ddpm/checkpoints/latest.pt --epochs 50
+
+# Sample
+python scripts/sample_ddpm.py --checkpoint outputs/ddpm/checkpoints/epoch_050.pt --seed 42
+
+# Curves + README assets
+python scripts/plot_ddpm_training_curves.py
+python scripts/export_ddpm_readme_assets.py
+```
+
+Checkpoints are written every epoch as `latest.pt`, plus periodic snapshots `epoch_005.pt`, `epoch_010.pt`, … (`checkpoint_every` in the YAML).
+
+On Colab, override `checkpoint_dir` / `sample_dir` / `log_dir` in `configs/ddpm/mnist.yaml` to a Drive path, or pass an absolute `--checkpoint` when sampling.
 
 ### Tests
 
@@ -150,65 +212,54 @@ pytest
 
 ```
 generative-models/
-├── configs/vae/          # Experiment configs (YAML)
-├── data/raw/             # MNIST download location
-├── docs/assets/vae/      # README figures (tracked in git)
-├── outputs/vae/          # Checkpoints, logs, samples, figures (gitignored)
-├── scripts/              # Training and experiment entry points
-├── src/generative_models/
-│   ├── datasets/         # MNIST dataloaders
-│   ├── models/           # VAE (Encoder, Decoder, VAE)
-│   ├── losses/           # VAELoss
-│   ├── trainers/         # VAETrainer
-│   ├── evaluation/       # Sampling, reconstruction, interpolation, viz
-│   └── diffusion/        # (planned) DDPM
-└── tests/
+├── configs/
+│   ├── vae/mnist.yaml
+│   └── ddpm/mnist.yaml
+├── docs/assets/
+│   ├── vae/                 # Tracked README figures
+│   └── ddpm/                # Tracked README figures
+├── outputs/                 # Checkpoints, logs, samples (gitignored)
+├── scripts/                 # CLI entry points
+└── src/generative_models/
+    ├── datasets/            # MNIST loaders
+    ├── models/              # VAE
+    ├── ddpm/                # Scheduler, U-Net, DDPM, sampler
+    ├── losses/              # VAELoss, DDPMLoss
+    ├── trainers/            # VAETrainer, DDPMTrainer
+    ├── evaluation/          # VAE evaluation helpers
+    └── utils/               # Device helpers
 ```
 
 ---
 
 ## Engineering patterns
 
-| Pattern | Location |
-|---------|----------|
-| Config-driven experiments | `configs/vae/mnist.yaml` |
-| Modular model components | `src/generative_models/models/vae.py` |
-| Separate loss module | `src/generative_models/losses/vae_loss.py` |
-| Reusable trainer | `src/generative_models/trainers/vae_trainer.py` |
-| CSV metric logging | `outputs/vae/logs/` |
-| Checkpointing + resume | `outputs/vae/checkpoints/` |
-| Evaluation scripts | `scripts/sample_vae.py`, etc. |
-
-These patterns will carry over directly to the DDPM implementation.
-
----
-
-## Research note: posterior collapse fix
-
-Early training used `BCE(reduction="mean")` with `KL = mean(sum(...))`, which made the KL term ~100,000× smaller than expected. The encoder collapsed to `μ ≈ 0, σ ≈ 1` and the decoder ignored the latent code.
-
-**Fix:** switch both terms to **sum reduction** (Pattern A). KL became ~1,000–2,500, reconstructions improved immediately, and random samples became diverse recognizable digits.
+| Pattern | VAE | DDPM |
+|---------|-----|------|
+| Config | `configs/vae/mnist.yaml` | `configs/ddpm/mnist.yaml` |
+| Model | `models/vae.py` | `ddpm/{scheduler,unet,diffusion}.py` |
+| Loss | `losses/vae_loss.py` | `losses/ddpm_loss.py` |
+| Trainer | `trainers/vae_trainer.py` | `trainers/ddpm_trainer.py` |
+| Sample | `scripts/sample_vae.py` | `scripts/sample_ddpm.py` |
+| Logs / ckpts | `outputs/vae/` | `outputs/ddpm/` |
 
 ---
 
 ## Roadmap
 
-**VAE (complete)**
+**VAE**
 
-- [x] Dataset pipeline
-- [x] Encoder / decoder / reparameterization
-- [x] VAE loss and trainer
-- [x] CSV logging and checkpointing
-- [x] Random sampling
+- [x] Dataset, encoder/decoder, ELBO loss, trainer
+- [x] Logging, checkpointing, sampling
 - [x] Reconstruction, interpolation, latent visualization
-- [x] 50 vs 100 epoch controlled experiment
+- [x] 50 vs 100 epoch comparison
 
-**Next: DDPM**
+**DDPM**
 
-- [ ] Noise schedule and forward diffusion
-- [ ] U-Net denoiser
-- [ ] DDPM loss and trainer (reusing existing patterns)
-- [ ] Sampling loop and evaluation
+- [x] Noise schedule and forward diffusion
+- [x] Time embedding and U-Net
+- [x] Noise-prediction loss and trainer
+- [x] Reverse sampling and 1 → 50 epoch results
 
 ---
 

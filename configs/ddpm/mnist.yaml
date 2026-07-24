@@ -4,7 +4,7 @@ data_dir: data/raw
 
 # Training
 batch_size: 64
-epochs: 20
+epochs: 50
 learning_rate: 0.0002
 optimizer: Adam
 
@@ -23,10 +23,10 @@ dropout: 0.1
 # Device
 device: auto
 
-# Saving
-checkpoint_dir: /content/drive/MyDrive/generative-models/outputs/ddpm/checkpoints
-sample_dir: /content/drive/MyDrive/generative-models/outputs/ddpm/samples
-log_dir: /content/drive/MyDrive/generative-models/outputs/ddpm/logs
+# Saving (relative paths — on Colab, override these to a Drive folder)
+checkpoint_dir: outputs/ddpm/checkpoints
+sample_dir: outputs/ddpm/samples
+log_dir: outputs/ddpm/logs
 train_metrics_file: train_metrics.csv
 val_metrics_file: val_metrics.csv
 # Keep latest.pt every epoch; also write epoch_005.pt, epoch_010.pt, ...
