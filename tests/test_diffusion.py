@@ -6,6 +6,7 @@ import torch
 
 from generative_models.datasets import get_mnist_dataloaders
 from generative_models.ddpm import (
+    DDPM,
     NoiseScheduler,
     TimestepEmbedding,
     UNet,
@@ -15,6 +16,7 @@ from generative_models.ddpm import (
     save_forward_diffusion_grid,
     sinusoidal_time_embedding,
 )
+from generative_models.losses import DDPMLoss
 
 
 def test_linear_beta_schedule_bounds_and_shape():
@@ -409,4 +411,138 @@ def test_default_unet_param_count_is_positive():
     model = UNet()
     n_params = sum(p.numel() for p in model.parameters())
     assert n_params > 1_000_000
+
+
+# --- Stage 5: DDPM model ---
+
+
+def _small_ddpm() -> DDPM:
+    return DDPM(
+        unet=_small_unet(),
+        num_timesteps=1000,
+        beta_start=1e-4,
+        beta_end=0.02,
+    )
+
+
+def test_ddpm_forward_shapes():
+    model = _small_ddpm()
+    train_loader, _ = get_mnist_dataloaders(batch_size=4, data_dir="data/raw")
+    x_0, _ = next(iter(train_loader))
+
+    noise_pred, noise, t = model(x_0)
+
+    assert noise_pred.shape == x_0.shape
+    assert noise.shape == x_0.shape
+    assert t.shape == (4,)
+    assert int(t.min()) >= 0
+    assert int(t.max()) < model.num_timesteps
+
+
+def test_ddpm_forward_is_differentiable():
+    model = _small_ddpm()
+    x_0 = torch.randn(2, 1, 28, 28)
+
+    noise_pred, noise, _ = model(x_0)
+    loss = torch.mean((noise_pred - noise) ** 2)
+    loss.backward()
+
+    assert model.unet.conv_in.weight.grad is not None
+    assert model.unet.time_embed.mlp[0].weight.grad is not None
+
+
+def test_ddpm_respects_provided_t_and_noise():
+    model = _small_ddpm()
+    model.eval()
+    x_0 = torch.randn(3, 1, 28, 28)
+    t = torch.tensor([0, 50, 999])
+    noise = torch.randn_like(x_0)
+
+    with torch.no_grad():
+        pred_a, noise_a, t_a = model(x_0, t=t, noise=noise)
+        pred_b, noise_b, t_b = model(x_0, t=t, noise=noise)
+
+    assert torch.equal(t_a, t)
+    assert torch.equal(noise_a, noise)
+    assert torch.allclose(pred_a, pred_b)
+
+
+def test_ddpm_predict_noise_matches_unet():
+    model = _small_ddpm()
+    x_t = torch.randn(2, 1, 28, 28)
+    t = torch.tensor([10, 100])
+
+    assert torch.allclose(model.predict_noise(x_t, t), model.unet(x_t, t))
+
+
+def test_ddpm_builds_default_unet_and_scheduler():
+    model = DDPM(
+        base_channels=32,
+        channel_mult=(1, 2),
+        num_res_blocks=1,
+        attention_resolutions=(),
+        num_timesteps=100,
+    )
+    assert model.num_timesteps == 100
+    assert isinstance(model.unet, UNet)
+    assert isinstance(model.scheduler, NoiseScheduler)
+
+    noise_pred, noise, t = model(torch.randn(2, 1, 28, 28))
+    assert noise_pred.shape == noise.shape == (2, 1, 28, 28)
+    assert t.shape == (2,)
+
+
+# --- Stage 6: diffusion loss ---
+
+
+def test_ddpm_loss_mean_matches_manual_mse():
+    criterion = DDPMLoss(reduction="mean")
+    noise_pred = torch.randn(4, 1, 28, 28)
+    noise = torch.randn(4, 1, 28, 28)
+
+    loss = criterion(noise_pred, noise)
+    expected = torch.mean((noise_pred - noise) ** 2)
+
+    assert loss.shape == torch.Size([])
+    assert torch.allclose(loss, expected)
+
+
+def test_ddpm_loss_perfect_prediction_is_zero():
+    criterion = DDPMLoss()
+    noise = torch.randn(2, 1, 28, 28)
+
+    assert criterion(noise, noise).item() == 0.0
+
+
+def test_ddpm_loss_with_model_forward_is_differentiable():
+    model = _small_ddpm()
+    criterion = DDPMLoss()
+    train_loader, _ = get_mnist_dataloaders(batch_size=4, data_dir="data/raw")
+    x_0, _ = next(iter(train_loader))
+
+    noise_pred, noise, _ = model(x_0)
+    loss = criterion(noise_pred, noise)
+    loss.backward()
+
+    assert loss.ndim == 0
+    assert model.unet.conv_in.weight.grad is not None
+
+
+def test_ddpm_loss_rejects_shape_mismatch():
+    criterion = DDPMLoss()
+    try:
+        criterion(torch.randn(2, 1, 28, 28), torch.randn(2, 1, 14, 14))
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+
+def test_ddpm_loss_invalid_reduction_raises():
+    try:
+        DDPMLoss(reduction="batchmean")
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
 

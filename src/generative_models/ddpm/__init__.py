@@ -1,5 +1,6 @@
 """DDPM (Denoising Diffusion Probabilistic Models) components."""
 
+from generative_models.ddpm.diffusion import DDPM
 from generative_models.ddpm.forward import (
     forward_diffuse,
     forward_diffuse_trajectory,
@@ -14,6 +15,7 @@ from generative_models.ddpm.time_embedding import (
 from generative_models.ddpm.unet import UNet
 
 __all__ = [
+    "DDPM",
     "NoiseScheduler",
     "TimestepEmbedding",
     "UNet",
