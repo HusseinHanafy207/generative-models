@@ -7,10 +7,13 @@ import torch
 from generative_models.datasets import get_mnist_dataloaders
 from generative_models.ddpm import (
     NoiseScheduler,
+    TimestepEmbedding,
+    UNet,
     forward_diffuse,
     forward_diffuse_trajectory,
     sample_timesteps,
     save_forward_diffusion_grid,
+    sinusoidal_time_embedding,
 )
 
 
@@ -248,3 +251,162 @@ def test_save_forward_diffusion_grid(tmp_path: Path):
 
     assert path.exists()
     assert path.stat().st_size > 0
+
+
+# --- Stage 3: time embedding ---
+
+
+def test_sinusoidal_embedding_shape():
+    t = torch.tensor([0, 1, 50, 999])
+    emb = sinusoidal_time_embedding(t, embedding_dim=64)
+
+    assert emb.shape == (4, 64)
+    assert emb.dtype == torch.float32
+
+
+def test_sinusoidal_embedding_matches_transformer_formula():
+    import math
+
+    embedding_dim = 64
+    t = torch.tensor([0, 7, 100, 999])
+    emb = sinusoidal_time_embedding(t, embedding_dim=embedding_dim)
+
+    half = embedding_dim // 2
+    freqs = torch.exp(
+        -math.log(10_000.0) * torch.arange(half, dtype=torch.float32) / (half - 1)
+    )
+    args = t.float().unsqueeze(1) * freqs.unsqueeze(0)
+    expected = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
+
+    assert torch.allclose(emb, expected, atol=1e-6)
+
+
+def test_sinusoidal_embedding_odd_dim_is_padded():
+    emb = sinusoidal_time_embedding(torch.tensor([0, 1]), embedding_dim=63)
+
+    assert emb.shape == (2, 63)
+    assert torch.all(emb[:, -1] == 0)
+
+
+def test_sinusoidal_embedding_t0_is_sin0_cos1_pattern():
+    """At t=0: sin(0)=0 and cos(0)=1 for every frequency."""
+    emb = sinusoidal_time_embedding(torch.tensor([0]), embedding_dim=8)
+    half = 4
+    assert torch.allclose(emb[0, :half], torch.zeros(half), atol=1e-6)
+    assert torch.allclose(emb[0, half:], torch.ones(half), atol=1e-6)
+
+
+def test_sinusoidal_embeddings_differ_across_timesteps():
+    emb = sinusoidal_time_embedding(torch.arange(16), embedding_dim=32)
+    dists = torch.cdist(emb, emb)
+    off_diag = dists[~torch.eye(16, dtype=torch.bool)]
+    assert off_diag.min().item() > 0
+
+
+def test_timestep_embedding_module_output_shape():
+    module = TimestepEmbedding(embedding_dim=128)
+    t = torch.randint(0, 1000, (8,))
+
+    out = module(t)
+
+    assert out.shape == (8, 128)
+
+
+def test_timestep_embedding_is_differentiable():
+    module = TimestepEmbedding(embedding_dim=64)
+    t = torch.tensor([0, 10, 100, 999])
+
+    out = module(t)
+    out.sum().backward()
+
+    assert module.mlp[0].weight.grad is not None
+
+
+def test_timestep_embedding_rejects_bad_timestep_rank():
+    module = TimestepEmbedding(embedding_dim=32)
+    try:
+        module(torch.tensor([[0, 1]]))
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+
+# --- Stage 4: U-Net ---
+
+
+def _small_unet() -> UNet:
+    """Faster U-Net for unit tests (still MNIST-shaped)."""
+    return UNet(
+        in_channels=1,
+        out_channels=1,
+        base_channels=32,
+        channel_mult=(1, 2, 4),
+        num_res_blocks=1,
+        attention_resolutions=(7,),
+        dropout=0.0,
+    )
+
+
+def test_unet_output_shape_matches_input():
+    model = _small_unet()
+    x = torch.randn(4, 1, 28, 28)
+    t = torch.tensor([0, 10, 100, 999])
+
+    out = model(x, t)
+
+    assert out.shape == (4, 1, 28, 28)
+
+
+def test_unet_on_forward_diffused_mnist():
+    model = _small_unet()
+    scheduler = NoiseScheduler(num_timesteps=1000)
+    train_loader, _ = get_mnist_dataloaders(batch_size=4, data_dir="data/raw")
+    x_0, _ = next(iter(train_loader))
+
+    x_t, t, noise = forward_diffuse(scheduler, x_0)
+    pred = model(x_t, t)
+
+    assert pred.shape == noise.shape == x_0.shape
+
+
+def test_unet_is_differentiable():
+    model = _small_unet()
+    x = torch.randn(2, 1, 28, 28)
+    t = torch.tensor([5, 50])
+
+    pred = model(x, t)
+    pred.sum().backward()
+
+    assert model.conv_in.weight.grad is not None
+    assert model.time_embed.mlp[0].weight.grad is not None
+
+
+def test_unet_is_conditioned_on_timestep():
+    model = _small_unet()
+    model.eval()
+    x = torch.randn(1, 1, 28, 28)
+
+    with torch.no_grad():
+        y0 = model(x, torch.tensor([0]))
+        y1 = model(x, torch.tensor([999]))
+
+    assert not torch.allclose(y0, y1)
+
+
+def test_unet_rejects_batch_mismatch():
+    model = _small_unet()
+    x = torch.randn(2, 1, 28, 28)
+    try:
+        model(x, torch.tensor([0, 1, 2]))
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+
+def test_default_unet_param_count_is_positive():
+    model = UNet()
+    n_params = sum(p.numel() for p in model.parameters())
+    assert n_params > 1_000_000
+
